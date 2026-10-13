@@ -1,0 +1,16 @@
+package com.turfly;
+import io.jsonwebtoken.*; import io.jsonwebtoken.security.Keys; import jakarta.servlet.*; import jakarta.servlet.http.*; import org.springframework.beans.factory.annotation.Value; import org.springframework.context.annotation.*; import org.springframework.http.*; import org.springframework.security.authentication.*; import org.springframework.security.config.annotation.web.builders.HttpSecurity; import org.springframework.security.config.http.SessionCreationPolicy; import org.springframework.security.core.authority.SimpleGrantedAuthority; import org.springframework.security.core.context.SecurityContextHolder; import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder; import org.springframework.security.crypto.password.PasswordEncoder; import org.springframework.security.web.SecurityFilterChain; import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter; import org.springframework.stereotype.Component; import org.springframework.web.filter.OncePerRequestFilter; import java.io.IOException; import java.nio.charset.StandardCharsets; import java.util.*;
+@Component class JwtService {
+ private final byte[] key; @Value("${app.jwt.expiration-ms}") long expiry;
+ JwtService(@Value("${app.jwt.secret}") String secret){key=secret.getBytes(StandardCharsets.UTF_8);}
+ String create(AppUser u){return Jwts.builder().subject(u.email).claim("role",u.role.name()).issuedAt(new Date()).expiration(new Date(System.currentTimeMillis()+expiry)).signWith(Keys.hmacShaKeyFor(key)).compact();}
+ Claims parse(String token){return Jwts.parser().verifyWith(Keys.hmacShaKeyFor(key)).build().parseSignedClaims(token).getPayload();}
+}
+@Component class JwtFilter extends OncePerRequestFilter {
+ final JwtService jwt; final UserRepository users; JwtFilter(JwtService j,UserRepository u){jwt=j;users=u;}
+ protected void doFilterInternal(HttpServletRequest req,HttpServletResponse res,FilterChain chain)throws ServletException,IOException{String h=req.getHeader("Authorization");if(h!=null&&h.startsWith("Bearer "))try{var c=jwt.parse(h.substring(7));var u=users.findByEmail(c.getSubject()).orElseThrow();var a=new UsernamePasswordAuthenticationToken(u.email,null,List.of(new SimpleGrantedAuthority("ROLE_"+u.role.name())));SecurityContextHolder.getContext().setAuthentication(a);}catch(Exception ignored){}chain.doFilter(req,res);}
+}
+@Configuration class SecurityConfig {
+ @Bean PasswordEncoder passwordEncoder(){return new BCryptPasswordEncoder();}
+ @Bean SecurityFilterChain filter(HttpSecurity http,JwtFilter jwt,@Value("${app.cors.origin}") String origin)throws Exception{return http.csrf(c->c.disable()).cors(c->c.configurationSource(r->{var x=new org.springframework.web.cors.CorsConfiguration();x.setAllowedOrigins(List.of(origin));x.setAllowedMethods(List.of("GET","POST","PUT","PATCH","DELETE","OPTIONS"));x.setAllowedHeaders(List.of("*"));x.setAllowCredentials(true);return x;})).sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS)).authorizeHttpRequests(a->a.requestMatchers("/api/auth/**","/api/turfs/**").permitAll().requestMatchers("/api/admin/**").hasRole("ADMIN").anyRequest().authenticated()).addFilterBefore(jwt,UsernamePasswordAuthenticationFilter.class).build();}
+}
